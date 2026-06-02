@@ -1,24 +1,114 @@
 use crate::android::susfs::api;
 use crate::android::susfs::config;
+use crate::android::susfs::config::data::Data;
 use log::warn;
+use std::{thread, time::Duration};
+
+const EXTERNAL_STORAGE_RETRY_COUNT: usize = 15;
+const EXTERNAL_STORAGE_RETRY_INTERVAL_SECS: u64 = 1;
 
 pub fn on_boot_completed() {
     let Some(config) = config::read_config() else {
         return;
     };
 
-    for sus_path in config.sus_path.sus_path {
-        if let Err(e) = api::add_sus_path(&api::SusPathType::Normal, &sus_path) {
-            warn!("failed to add sus_path '{sus_path}': {e}");
+    apply_sus_paths_with_retry(&config);
+    apply_sus_maps(&config);
+}
+
+pub fn on_services() {
+    let Some(config) = config::read_config() else {
+        return;
+    };
+
+    apply_sus_paths(&config);
+    apply_sus_maps(&config);
+}
+
+fn apply_sus_paths(config: &Data) {
+    for sus_path in &config.sus_path.sus_path {
+        if sus_path.trim().is_empty() {
+            continue;
+        }
+        apply_sus_path_entry(&api::SusPathType::Normal, "sus_path", sus_path, false);
+    }
+    for sus_path_loop in &config.sus_path.sus_path_loop {
+        if sus_path_loop.trim().is_empty() {
+            continue;
+        }
+        apply_sus_path_entry(
+            &api::SusPathType::Loop,
+            "sus_path_loop",
+            sus_path_loop,
+            false,
+        );
+    }
+}
+
+fn apply_sus_paths_with_retry(config: &Data) {
+    for sus_path in &config.sus_path.sus_path {
+        if sus_path.trim().is_empty() {
+            continue;
+        }
+        apply_sus_path_entry(&api::SusPathType::Normal, "sus_path", sus_path, true);
+    }
+    for sus_path_loop in &config.sus_path.sus_path_loop {
+        if sus_path_loop.trim().is_empty() {
+            continue;
+        }
+        apply_sus_path_entry(
+            &api::SusPathType::Loop,
+            "sus_path_loop",
+            sus_path_loop,
+            true,
+        );
+    }
+}
+
+fn apply_sus_path_entry(
+    path_type: &api::SusPathType,
+    label: &str,
+    path: &str,
+    retry_external_storage: bool,
+) {
+    let retry_count = if retry_external_storage && is_external_storage_path(path) {
+        EXTERNAL_STORAGE_RETRY_COUNT
+    } else {
+        1
+    };
+
+    let mut last_error = None;
+    for attempt in 0..retry_count {
+        match api::add_sus_path(path_type, &path) {
+            Ok(()) => return,
+            Err(e) => {
+                last_error = Some(e.to_string());
+                if attempt + 1 < retry_count {
+                    thread::sleep(Duration::from_secs(EXTERNAL_STORAGE_RETRY_INTERVAL_SECS));
+                }
+            }
         }
     }
-    for sus_path_loop in config.sus_path.sus_path_loop {
-        if let Err(e) = api::add_sus_path(&api::SusPathType::Loop, &sus_path_loop) {
-            warn!("failed to add sus_path_loop '{sus_path_loop}': {e}");
+
+    warn!(
+        "failed to add {label} '{path}': {}",
+        last_error.unwrap_or_else(|| "unknown error".to_string())
+    );
+}
+
+fn is_external_storage_path(path: &str) -> bool {
+    matches!(path, "/sdcard" | "/storage/emulated" | "/data/media")
+        || path.starts_with("/sdcard/")
+        || path.starts_with("/storage/emulated/")
+        || path.starts_with("/data/media/")
+}
+
+fn apply_sus_maps(config: &Data) {
+    for sus_map in &config.sus_map {
+        if sus_map.trim().is_empty() {
+            continue;
         }
-    }
-    for sus_map in config.sus_map {
-        if let Err(e) = api::add_sus_map(&sus_map) {
+        if let Err(e) = api::add_sus_map(sus_map.as_str()) {
             warn!("failed to add sus_map '{sus_map}': {e}");
         }
     }
@@ -47,22 +137,20 @@ pub fn on_post_fs_data() {
         warn!("failed to hide sus mnts for non su procs: {e}");
     }
 
-    for sus_kstat in config.kstat.sus_kstat {
-        if let Err(e) = api::add_sus_kstat(&sus_kstat) {
+    apply_sus_paths(&config);
+
+    for sus_kstat in &config.kstat.sus_kstat {
+        if sus_kstat.trim().is_empty() {
+            continue;
+        }
+        if let Err(e) = api::add_sus_kstat(sus_kstat.as_str()) {
             warn!("failed to add sus_kstat '{sus_kstat}': {e}");
         }
     }
-    for update_kstat in config.kstat.update_kstat {
-        if let Err(e) = api::update_sus_kstat(&update_kstat) {
-            warn!("failed to update sus_kstat '{update_kstat}': {e}");
+    for statically in &config.kstat.statically {
+        if statically.path.trim().is_empty() {
+            continue;
         }
-    }
-    for full_clone in config.kstat.full_clone {
-        if let Err(e) = api::update_sus_kstat_full_clone(&full_clone) {
-            warn!("failed to update sus_kstat_full_clone '{full_clone}': {e}");
-        }
-    }
-    for statically in config.kstat.statically {
         if let Err(e) = api::add_sus_kstat_statically(
             &statically.path,
             &statically.ino,
@@ -82,6 +170,32 @@ pub fn on_post_fs_data() {
                 "failed to add sus_kstat_statically '{}': {}",
                 statically.path, e
             );
+        }
+    }
+}
+
+pub fn on_post_mount() {
+    let Some(config) = config::read_config() else {
+        return;
+    };
+
+    apply_sus_paths(&config);
+    apply_sus_maps(&config);
+
+    for update_kstat in &config.kstat.update_kstat {
+        if update_kstat.trim().is_empty() {
+            continue;
+        }
+        if let Err(e) = api::update_sus_kstat(update_kstat.as_str()) {
+            warn!("failed to update sus_kstat '{update_kstat}': {e}");
+        }
+    }
+    for full_clone in &config.kstat.full_clone {
+        if full_clone.trim().is_empty() {
+            continue;
+        }
+        if let Err(e) = api::update_sus_kstat_full_clone(full_clone.as_str()) {
+            warn!("failed to update sus_kstat_full_clone '{full_clone}': {e}");
         }
     }
 }

@@ -812,7 +812,8 @@ class SuSFSScreenViewModel : ViewModel() {
         command: String,
         showFailureSnackbar: Boolean = true,
     ): Boolean = withContext(Dispatchers.IO) {
-        val success = runCatching { execKsud("susfs $command") }.getOrDefault(false)
+        val success = runCatching { execKsud("susfs $command", globalMnt = true) }
+            .getOrDefault(false)
         if (!success && showFailureSnackbar) {
             snackbarText = ksuApp.getString(R.string.operation_failed)
         }

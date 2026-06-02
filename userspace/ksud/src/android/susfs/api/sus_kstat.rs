@@ -97,10 +97,10 @@ fn parse_or_default<T>(
 where
     T: std::str::FromStr,
 {
+    info.flags |= flags.bits();
     if val == "default" {
         Ok(default)
     } else {
-        info.flags |= flags.bits();
         val.parse::<T>()
             .map_err(|_| anyhow::format_err!("Invalid number format: {val}"))
     }
@@ -135,9 +135,8 @@ where
 
     info.is_statically = false;
     info.target_ino = md.ino();
-    info.spoofed_size = md.size() as i64;
-    info.spoofed_blocks = md.blocks();
-    info.flags |= KstatSpoofFlags::AUTO_SPOOF.bits();
+    copy_metadata_to_sus_kstat(&mut info, &md);
+    info.flags |= KstatSpoofFlags::AUTO_SPOOF_FULL_CLONE.bits();
     info.err = ERR_CMD_NOT_SUPPORTED;
 
     susfs_ctl(&mut info, CMD_SUSFS_UPDATE_SUS_KSTAT);
@@ -160,7 +159,7 @@ where
 
     info.is_statically = false;
     info.target_ino = md.ino();
-    info.flags |= KstatSpoofFlags::AUTO_SPOOF.bits();
+    info.flags |= KstatSpoofFlags::AUTO_SPOOF_FULL_CLONE.bits();
     info.err = ERR_CMD_NOT_SUPPORTED;
 
     susfs_ctl(&mut info, CMD_SUSFS_ADD_SUS_KSTAT);
