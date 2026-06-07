@@ -11,7 +11,10 @@ use crate::android::susfs::config::data::Data;
 fn is_sdcard_mounted() -> bool {
     let file = match fs::read_to_string("/proc/mounts") {
         Ok(f) => f,
-        Err(_) => return false,
+        Err(e) => {
+            log::debug!("failed to read mounts");
+            return false;
+        }
     };
 
     for line in file.lines() {
@@ -29,7 +32,9 @@ fn is_sdcard_mounted() -> bool {
 pub fn on_boot_completed() -> Result<()> {
     let config = config::read_config();
 
-    let _ = crate::android::utils::daemonize(false);
+    if let Err(e) = crate::android::utils::daemonize(false) {
+        log::error!("failed to spawn process on boot-completed");
+    }
 
     let mut inotify = Inotify::init()?;
 
