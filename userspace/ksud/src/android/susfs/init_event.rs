@@ -29,7 +29,7 @@ fn is_sdcard_mounted() -> bool {
 pub fn on_boot_completed() -> Result<()> {
     let config = config::read_config();
 
-    let _ = crate::android::utils::create_daemon(true);
+    let _ = crate::android::utils::daemonize(false);
 
     let mut inotify = Inotify::init()?;
 
